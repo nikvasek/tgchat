@@ -25,7 +25,8 @@ python main.py bot
 ## Railway
 
 1. Создайте проект на [Railway](https://railway.app/) из GitHub-репозитория
-2. Добавьте переменные окружения:
+2. Подключите репозиторий `nikvasek/tgchat` к сервису
+3. Добавьте переменные окружения:
 
 | Переменная | Описание |
 |------------|----------|
@@ -37,7 +38,19 @@ python main.py bot
 | `GOOGLE_SPREADSHEET_ID` | ID Google Таблицы |
 | `GOOGLE_CREDENTIALS_JSON` | Содержимое credentials.json одной строкой |
 
-3. Start command: `python main.py bot`
+4. Start command: `python main.py bot`
+
+### Автодеплой при git push
+
+**Вариант A — нативный Railway (рекомендуется):**
+1. Railway Dashboard → сервис `tgchat` → Settings → подключить GitHub-репозиторий
+2. Включить **Autodeploy** для ветки `main`
+3. Убедиться, что Railway GitHub App имеет доступ к репозиторию
+
+**Вариант B — GitHub Actions:**
+- Workflow `.github/workflows/deploy.yml` деплоит через `railway up`
+- Секрет `RAILWAY_TOKEN` уже добавлен в GitHub
+- После `git push` деплой запускается автоматически
 
 Настройки keywords и чатов на Railway берутся из Google Таблицы (листы **Keywords**, **Чаты**).
 
