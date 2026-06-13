@@ -7,6 +7,8 @@ chats:
 # Ссылка на Google Таблицу (можно менять из бота)
 google_sheets_url: "https://docs.google.com/spreadsheets/d/1mXDo5AFvck4p1oc26_WzLEHUeJHufBJ09O9-l8RZUZo/edit"
 
+scanning_enabled: true
+
 monitor:
   messages_limit: 500
   poll_interval: 300

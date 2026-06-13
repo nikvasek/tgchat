@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
     "keywords": [],
     "chats": [],
     "google_sheets_url": "",
+    "scanning_enabled": True,
     "monitor": {
         "messages_limit": 500,
         "poll_interval": 300,
@@ -212,12 +213,23 @@ class ConfigStore:
         except ValueError as error:
             return False, str(error)
 
+    async def set_scanning_enabled(self, enabled: bool) -> tuple[bool, str]:
+        def mutate(data: dict) -> None:
+            data["scanning_enabled"] = enabled
+
+        await self._update(mutate)
+        return True, "Сканирование запущено" if enabled else "Сканирование остановлено"
+
+    async def is_scanning_enabled(self) -> bool:
+        data = await self.get_raw()
+        return bool(data.get("scanning_enabled", True))
+
     async def set_interval(self, minutes: int) -> tuple[bool, str]:
         if minutes < 1:
             return False, "Интервал должен быть не меньше 1 минуты"
 
         def mutate(data: dict) -> None:
-            data.setdefault("monitor", {})["poll_interval"] = minutes * 60
+            data.setdefault("monitor", {})["poll_interval"] = max(minutes, 1) * 60
 
         await self._update(mutate)
         return True, f"Интервал: {minutes} мин."
@@ -239,9 +251,12 @@ class ConfigStore:
         chats = data.get("chats", [])
         interval_sec = data.get("monitor", {}).get("poll_interval", 300)
         google_url = data.get("google_sheets_url", "")
+        scanning = data.get("scanning_enabled", True)
 
         lines = [
             "<b>Текущие настройки</b>",
+            "",
+            f"<b>Сканирование:</b> {'🟢 запущено' if scanning else '🔴 остановлено'}",
             "",
             f"<b>Keywords ({len(keywords)}):</b>",
         ]

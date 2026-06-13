@@ -14,6 +14,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    User,
 )
 from telethon import TelegramClient
 
@@ -33,7 +34,12 @@ class Form(StatesGroup):
     set_google = State()
 
 
-def main_menu_kb() -> InlineKeyboardMarkup:
+def main_menu_kb(scanning_enabled: bool) -> InlineKeyboardMarkup:
+    scan_button = (
+        InlineKeyboardButton(text="⏹ Остановить сканирование", callback_data="action:scan_stop")
+        if scanning_enabled
+        else InlineKeyboardButton(text="▶️ Запустить сканирование", callback_data="action:scan_start")
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -48,10 +54,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📊 Excel", callback_data="action:export"),
                 InlineKeyboardButton(text="📈 Статус", callback_data="action:status"),
             ],
-            [
-                InlineKeyboardButton(text="▶️ Сканировать", callback_data="action:scan"),
-                InlineKeyboardButton(text="🌐 Глобальный", callback_data="action:global"),
-            ],
+            [scan_button],
             [InlineKeyboardButton(text="🔄 Синхронизация Google", callback_data="action:sync")],
         ]
     )
@@ -85,6 +88,15 @@ def back_kb() -> InlineKeyboardMarkup:
     )
 
 
+def _user_label(user: User | None) -> str:
+    if user is None:
+        return "Неизвестный пользователь"
+    parts = [user.first_name or "", user.last_name or ""]
+    name = " ".join(part for part in parts if part).strip() or "Без имени"
+    username = f" (@{user.username})" if user.username else ""
+    return f"{name}{username} [id: {user.id}]"
+
+
 class BotApp:
     def __init__(
         self,
@@ -96,8 +108,6 @@ class BotApp:
     ):
         if not env.bot_token:
             raise ValueError("Укажите TELEGRAM_BOT_TOKEN в .env")
-        if not env.admin_ids:
-            raise ValueError("Укажите BOT_ADMIN_IDS в .env (ваш Telegram user id)")
 
         self.env = env
         self.store = store
@@ -107,59 +117,53 @@ class BotApp:
         self.dp = Dispatcher(storage=MemoryStorage())
         self._register_handlers()
 
-    def _is_admin(self, user_id: int | None) -> bool:
-        return user_id is not None and user_id in self.env.admin_ids
+    async def _notify_admins(self, text: str) -> None:
+        if not self.env.admin_ids:
+            return
+        for admin_id in self.env.admin_ids:
+            try:
+                await self.bot.send_message(admin_id, text)
+            except Exception as error:
+                logger.warning("Не удалось уведомить админа %s: %s", admin_id, error)
 
-    async def _deny(self, event: Message | CallbackQuery) -> None:
-        text = "Нет доступа. Добавьте свой user id в BOT_ADMIN_IDS."
-        if isinstance(event, CallbackQuery):
-            await event.answer(text, show_alert=True)
-        else:
-            await event.answer(text)
+    async def _notify_user_joined(self, user: User | None) -> None:
+        if not self.env.admin_ids:
+            return
+        await self._notify_admins(f"👤 Новый пользователь в боте:\n{_user_label(user)}")
 
     def _register_handlers(self) -> None:
         @self.dp.message(Command("start"))
         async def cmd_start(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             await state.clear()
+            await self._notify_user_joined(message.from_user)
+            scanning = await self.store.is_scanning_enabled()
             await message.answer(
-                "Панель управления парсером Telegram.\n"
-                "✅ Доступ подтверждён — уведомления будут приходить сюда.\n\n"
+                "Панель управления парсером Telegram.\n\n"
                 "Keywords и чаты синхронизируются с листами\n"
                 "<b>Keywords</b> и <b>Чаты</b> в Google Таблице.\n\n"
                 "Выберите действие:",
-                reply_markup=main_menu_kb(),
+                reply_markup=main_menu_kb(scanning),
                 parse_mode="HTML",
             )
 
         @self.dp.callback_query(F.data == "menu:main")
         async def menu_main(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await state.clear()
+            scanning = await self.store.is_scanning_enabled()
             await callback.message.edit_text(
                 "Панель управления парсером Telegram.\nВыберите действие:",
-                reply_markup=main_menu_kb(),
+                reply_markup=main_menu_kb(scanning),
             )
             await callback.answer()
 
         @self.dp.callback_query(F.data == "menu:chats")
         async def menu_chats(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await state.clear()
             await callback.message.edit_text("Управление чатами:", reply_markup=chats_menu_kb())
             await callback.answer()
 
         @self.dp.callback_query(F.data == "menu:keywords")
         async def menu_keywords(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await state.clear()
             await callback.message.edit_text(
                 "Управление ключевыми словами:",
@@ -169,9 +173,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "chats:list")
         async def chats_list(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await self.store.sync_from_google()
             data = await self.store.get_raw()
             chats = data.get("chats", [])
@@ -185,9 +186,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "kw:list")
         async def kw_list(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await self.store.sync_from_google()
             data = await self.store.get_raw()
             keywords = data.get("keywords", [])
@@ -201,9 +199,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "chats:add")
         async def chats_add(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await state.set_state(Form.add_chat)
             await callback.message.edit_text(
                 "Отправьте @username, ссылку t.me/... или ID чата:",
@@ -213,9 +208,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "chats:del")
         async def chats_del(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             data = await self.store.get_raw()
             chats = data.get("chats", [])
             hint = "\n".join(f"{i}. {c}" for i, c in enumerate(chats, 1)) if chats else "— пусто"
@@ -228,9 +220,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "kw:add")
         async def kw_add(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await state.set_state(Form.add_keyword)
             await callback.message.edit_text(
                 "Отправьте ключевое слово:",
@@ -240,9 +229,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "kw:del")
         async def kw_del(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             data = await self.store.get_raw()
             keywords = data.get("keywords", [])
             hint = "\n".join(f"{i}. {k}" for i, k in enumerate(keywords, 1)) if keywords else "— пусто"
@@ -255,9 +241,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "menu:interval")
         async def menu_interval(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             data = await self.store.get_raw()
             minutes = data.get("monitor", {}).get("poll_interval", 300) // 60
             await state.set_state(Form.set_interval)
@@ -270,9 +253,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "menu:google")
         async def menu_google(callback: CallbackQuery, state: FSMContext):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             data = await self.store.get_raw()
             url = data.get("google_sheets_url", "")
             await state.set_state(Form.set_google)
@@ -286,9 +266,6 @@ class BotApp:
 
         @self.dp.callback_query(F.data == "action:sync")
         async def action_sync(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             await callback.answer("Синхронизация...")
             changed, pull_message = await self.store.sync_from_google()
             ok, push_message = await self.store.push_to_google()
@@ -297,22 +274,22 @@ class BotApp:
             text += f"В Google: {push_message if ok else push_message}"
             if changed:
                 text += "\n\nНастройки обновлены из таблицы."
-            await callback.message.answer(text, reply_markup=main_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await callback.message.answer(text, reply_markup=main_menu_kb(scanning))
 
         @self.dp.callback_query(F.data == "action:status")
         async def action_status(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             text = await self.store.format_status()
-            await callback.message.edit_text(text, reply_markup=main_menu_kb(), parse_mode="HTML")
+            scanning = await self.store.is_scanning_enabled()
+            await callback.message.edit_text(
+                text,
+                reply_markup=main_menu_kb(scanning),
+                parse_mode="HTML",
+            )
             await callback.answer()
 
         @self.dp.callback_query(F.data == "action:export")
         async def action_export(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
             path = Path(self.env.excel_output_file)
             if not path.exists():
                 await callback.answer("Файл Excel ещё не создан", show_alert=True)
@@ -324,84 +301,70 @@ class BotApp:
                 await callback.message.answer(f"Google Таблица:\n{google_url}")
             await callback.answer("Файл отправлен")
 
-        @self.dp.callback_query(F.data == "action:scan")
-        async def action_scan(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
-            await callback.answer("Запускаю мониторинг...")
-            monitor_added = await self.scheduler.run_monitor()
-            await callback.message.answer(f"Мониторинг завершён. Добавлено: {monitor_added}")
+        @self.dp.callback_query(F.data == "action:scan_start")
+        async def action_scan_start(callback: CallbackQuery):
+            ok, result = await self.store.set_scanning_enabled(True)
+            await callback.answer(result, show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=main_menu_kb(True))
 
-        @self.dp.callback_query(F.data == "action:global")
-        async def action_global(callback: CallbackQuery):
-            if not self._is_admin(callback.from_user.id):
-                await self._deny(callback)
-                return
-            await callback.answer("Запускаю глобальный поиск...")
-            global_added = await self.scheduler.run_global()
-            await callback.message.answer(f"Глобальный поиск завершён. Добавлено: {global_added}")
+        @self.dp.callback_query(F.data == "action:scan_stop")
+        async def action_scan_stop(callback: CallbackQuery):
+            ok, result = await self.store.set_scanning_enabled(False)
+            await callback.answer(result, show_alert=True)
+            await callback.message.edit_reply_markup(reply_markup=main_menu_kb(False))
 
         @self.dp.message(Form.add_chat)
         async def form_add_chat(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             ok, result = await self.store.add_chat(message.text or "")
             await state.clear()
-            await message.answer(result, reply_markup=main_menu_kb() if ok else chats_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await message.answer(result, reply_markup=main_menu_kb(scanning) if ok else chats_menu_kb())
 
         @self.dp.message(Form.del_chat)
         async def form_del_chat(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             ok, result = await self.store.remove_chat(message.text or "")
             await state.clear()
-            await message.answer(result, reply_markup=main_menu_kb() if ok else chats_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await message.answer(result, reply_markup=main_menu_kb(scanning) if ok else chats_menu_kb())
 
         @self.dp.message(Form.add_keyword)
         async def form_add_keyword(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             ok, result = await self.store.add_keyword(message.text or "")
             await state.clear()
-            await message.answer(result, reply_markup=main_menu_kb() if ok else keywords_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await message.answer(result, reply_markup=main_menu_kb(scanning) if ok else keywords_menu_kb())
 
         @self.dp.message(Form.del_keyword)
         async def form_del_keyword(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             ok, result = await self.store.remove_keyword(message.text or "")
             await state.clear()
-            await message.answer(result, reply_markup=main_menu_kb() if ok else keywords_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await message.answer(result, reply_markup=main_menu_kb(scanning) if ok else keywords_menu_kb())
 
         @self.dp.message(Form.set_interval)
         async def form_set_interval(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             text = (message.text or "").strip()
             if not text.isdigit():
                 await message.answer("Введите число минут, например: 5")
                 return
-            ok, result = await self.store.set_interval(int(text))
+            minutes = int(text)
+            if minutes < 1:
+                await message.answer("Минимальный интервал — 1 минута")
+                return
+            ok, result = await self.store.set_interval(minutes)
             await state.clear()
-            await message.answer(result, reply_markup=main_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await message.answer(result, reply_markup=main_menu_kb(scanning))
 
         @self.dp.message(Form.set_google)
         async def form_set_google(message: Message, state: FSMContext):
-            if not self._is_admin(message.from_user.id):
-                await self._deny(message)
-                return
             url = (message.text or "").strip()
             if url == "-":
                 url = ""
             ok, result = await self.store.set_google_url(url)
             await state.clear()
-            await message.answer(result, reply_markup=main_menu_kb())
+            scanning = await self.store.is_scanning_enabled()
+            await message.answer(result, reply_markup=main_menu_kb(scanning))
 
     async def run(self) -> None:
         await self.dp.start_polling(self.bot)

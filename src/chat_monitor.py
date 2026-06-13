@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -10,6 +9,7 @@ from telethon.errors import FloodWaitError, RPCError
 from .config import AppConfig, EnvConfig
 from .exporter import CombinedExporter, MessageExporter
 from .messages import FoundMessage
+from .telegram_safety import telegram_safety
 from .telegram_utils import author_name, entity_title, entity_username, message_link
 
 logger = logging.getLogger(__name__)
@@ -77,11 +77,20 @@ class ChatMonitor:
         resolved = []
         for chat_ref in self.app_config.chats:
             try:
+                await telegram_safety.before_request(f"get_entity {chat_ref}")
                 entity = await self.client.get_entity(chat_ref)
                 resolved.append(entity)
                 logger.info("Подключён чат: %s", entity_title(entity))
+            except FloodWaitError as error:
+                await telegram_safety.handle_flood_wait(error, chat_ref)
+                try:
+                    entity = await self.client.get_entity(chat_ref)
+                    resolved.append(entity)
+                except (ValueError, RPCError) as retry_error:
+                    logger.error("Не удалось найти чат '%s': %s", chat_ref, retry_error)
             except (ValueError, RPCError) as error:
                 logger.error("Не удалось найти чат '%s': %s", chat_ref, error)
+            await telegram_safety.between_chats()
 
         self._resolved_chats = resolved
         return resolved
@@ -107,6 +116,7 @@ class ChatMonitor:
         for chat_entity in chats:
             chat_name = entity_title(chat_entity)
             try:
+                await telegram_safety.before_request(f"scan {chat_name}")
                 async for message in self.client.iter_messages(
                     chat_entity,
                     limit=self.app_config.monitor.messages_limit,
@@ -118,14 +128,14 @@ class ChatMonitor:
                     item = await _message_to_found(self.client, message, chat_entity, keyword)
                     if item:
                         found.append(item)
+                    await telegram_safety.pause(0.3, "между сообщениями")
 
             except FloodWaitError as error:
-                logger.warning(
-                    "FloodWait %s сек. при сканировании '%s'", error.seconds, chat_name
-                )
-                await asyncio.sleep(error.seconds)
+                await telegram_safety.handle_flood_wait(error, chat_name)
             except RPCError as error:
                 logger.error("Ошибка при сканировании '%s': %s", chat_name, error)
+
+            await telegram_safety.between_chats()
 
         added = self.exporter.append_messages(self.env_config.sheet_monitor, found)
         logger.info("Мониторинг: найдено %s, добавлено в таблицу %s", len(found), added)

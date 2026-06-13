@@ -54,7 +54,7 @@ async def run_bot(args) -> None:
     if not env.bot_token:
         raise ValueError("Укажите TELEGRAM_BOT_TOKEN в .env")
     if not env.admin_ids:
-        raise ValueError("Укажите BOT_ADMIN_IDS в .env")
+        raise ValueError("Укажите BOT_ADMIN_IDS в .env (для уведомлений админу)")
 
     app_config = load_config(args.config)
     sheets_sync = create_sheets_sync(env, app_config)
