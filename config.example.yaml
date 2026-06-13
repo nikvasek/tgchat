@@ -7,6 +7,12 @@ chats:
 # Ссылка на Google Таблицу (можно менять из бота)
 google_sheets_url: "https://docs.google.com/spreadsheets/d/1mXDo5AFvck4p1oc26_WzLEHUeJHufBJ09O9-l8RZUZo/edit"
 
+# URL вебхука (Google Apps Script) — ТРУБА отправляет сюда JSON
+webhook_url: ""
+
+# ТРУБА: все новые сообщения из списка чатов → PostgreSQL → webhook
+pipe_enabled: true
+
 scanning_enabled: true
 
 monitor:

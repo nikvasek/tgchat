@@ -9,17 +9,17 @@ import sys
 from telethon import TelegramClient
 
 from src.bootstrap import bootstrap_runtime
-
-from src.bootstrap import bootstrap_runtime
 from src.bot_app import BotApp
 from src.chat_monitor import ChatMonitor
 from src.config import load_config, load_env
 from src.config_store import ConfigStore
+from src.pipe_buffer import PipeBuffer
 from src.sync_factory import create_sheets_sync
 from src.global_search import GlobalSearcher
 from src.exporter import create_exporter
 from src.scheduler import MonitorScheduler
 from src.telegram_client import create_telegram_client
+from src.webhook_pipe import WebhookPipe
 
 
 def setup_logging(verbose: bool) -> None:
@@ -65,11 +65,24 @@ async def run_bot(args) -> None:
         bot = Bot(token=env.bot_token)
         scheduler = MonitorScheduler(client=client, store=store, env=env, bot=bot)
         scheduler.start()
+
+        pipe = None
+        if env.database_url:
+            buffer = PipeBuffer(env.database_url)
+            pipe = WebhookPipe(client=client, store=store, buffer=buffer)
+            await pipe.start()
+        else:
+            logging.getLogger(__name__).warning(
+                "DATABASE_URL не задан — ТРУБА (webhook) отключена"
+            )
+
         app = BotApp(env, store, client, scheduler, bot=bot)
         try:
             await app.run()
         finally:
             scheduler.stop()
+            if pipe:
+                await pipe.stop()
 
 
 async def run_global(args) -> None:

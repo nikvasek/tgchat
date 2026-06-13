@@ -20,6 +20,8 @@ DEFAULT_CONFIG = {
     "keywords": [],
     "chats": [],
     "google_sheets_url": "",
+    "webhook_url": "",
+    "pipe_enabled": True,
     "scanning_enabled": True,
     "monitor": {
         "messages_limit": 500,
@@ -245,18 +247,43 @@ class ConfigStore:
         await self._update(mutate)
         return True, "Ссылка сохранена" if url else "Ссылка удалена"
 
+    async def set_webhook_url(self, url: str) -> tuple[bool, str]:
+        url = url.strip()
+        if url and not url.startswith("https://"):
+            return False, "URL вебхука должен начинаться с https://"
+
+        def mutate(data: dict) -> None:
+            data["webhook_url"] = url
+
+        await self._update(mutate)
+        return True, "Webhook URL сохранён" if url else "Webhook URL удалён"
+
+    async def set_pipe_enabled(self, enabled: bool) -> tuple[bool, str]:
+        def mutate(data: dict) -> None:
+            data["pipe_enabled"] = enabled
+
+        await self._update(mutate)
+        return True, "ТРУБА запущена" if enabled else "ТРУБА остановлена"
+
+    async def is_pipe_enabled(self) -> bool:
+        data = await self.get_raw()
+        return bool(data.get("pipe_enabled", True))
+
     async def format_status(self) -> str:
         data = await self.get_raw()
         keywords = data.get("keywords", [])
         chats = data.get("chats", [])
         interval_sec = data.get("monitor", {}).get("poll_interval", 300)
         google_url = data.get("google_sheets_url", "")
+        webhook_url = data.get("webhook_url", "")
         scanning = data.get("scanning_enabled", True)
+        pipe_enabled = data.get("pipe_enabled", True)
 
         lines = [
             "<b>Текущие настройки</b>",
             "",
             f"<b>Сканирование:</b> {'🟢 запущено' if scanning else '🔴 остановлено'}",
+            f"<b>ТРУБА:</b> {'🟢 запущена' if pipe_enabled else '🔴 остановлена'}",
             "",
             f"<b>Keywords ({len(keywords)}):</b>",
         ]
@@ -273,7 +300,9 @@ class ConfigStore:
             "",
             f"<b>Интервал проверки:</b> {interval_sec // 60} мин.",
             f"<b>Google Таблица:</b> {google_url or '— не задана'}",
+            f"<b>Webhook URL:</b> {webhook_url or '— не задан'}",
             "",
+            "<i>ТРУБА: все сообщения из списка чатов → PostgreSQL → webhook</i>",
             "<i>Листы настроек: Keywords, Чаты</i>",
         ]
         return "\n".join(lines)

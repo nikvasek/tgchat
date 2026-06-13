@@ -26,6 +26,8 @@ class AppConfig:
     monitor: MonitorSettings
     global_search: GlobalSearchSettings
     google_sheets_url: str = ""
+    webhook_url: str = ""
+    pipe_enabled: bool = True
 
 
 @dataclass
@@ -41,6 +43,7 @@ class EnvConfig:
     excel_output_file: str
     sheet_monitor: str
     sheet_global: str
+    database_url: str
 
 
 def load_env() -> EnvConfig:
@@ -72,6 +75,7 @@ def load_env() -> EnvConfig:
         excel_output_file=os.getenv("EXCEL_OUTPUT_FILE", "results.xlsx"),
         sheet_monitor=os.getenv("SHEET_MONITOR", "Мониторинг чатов"),
         sheet_global=os.getenv("SHEET_GLOBAL", "Глобальный поиск"),
+        database_url=os.getenv("DATABASE_URL", "").strip(),
     )
 
 
@@ -103,4 +107,6 @@ def load_config(path: str | Path) -> AppConfig:
             limit_per_keyword=int(global_raw.get("limit_per_keyword", 100)),
         ),
         google_sheets_url=str(raw.get("google_sheets_url", "")).strip(),
+        webhook_url=str(raw.get("webhook_url", "")).strip(),
+        pipe_enabled=bool(raw.get("pipe_enabled", True)),
     )
