@@ -1,0 +1,12 @@
+.env
+config.yaml
+credentials.json
+results.xlsx
+output/
+*.session
+*.session-journal
+__pycache__/
+*.pyc
+.venv/
+venv/
+comand
